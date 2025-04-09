@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { AudioProcessor } from '../utils/audioUtils';
 
 // Cloud particle component
-const CloudParticles = ({ audioData }: { audioData: number[] }) => {
+const CloudParticles = ({ audioData, sensitivity = 1.0 }: { audioData: number[], sensitivity?: number }) => {
   const particlesRef = useRef<THREE.Points>(null);
   const [particles, setParticles] = useState<THREE.BufferGeometry | null>(null);
   
@@ -51,9 +51,6 @@ const CloudParticles = ({ audioData }: { audioData: number[] }) => {
     const colors = particles.getAttribute('color') as THREE.BufferAttribute;
     const sizes = particles.getAttribute('size') as THREE.BufferAttribute;
     
-    // Calculate overall audio intensity for global effects
-    const avgAudioIntensity = audioData.reduce((sum, val) => sum + val, 0) / audioData.length / 255;
-    
     // Add a breathing effect that's present even when quiet
     const time = clock.elapsedTime;
     const breathingRate = 0.15; // Slow breathing rate
@@ -64,11 +61,11 @@ const CloudParticles = ({ audioData }: { audioData: number[] }) => {
     
     // Derive sound characteristics for directional influence
     // Use first few bands to determine low frequency intensity (bass)
-    const lowFreqIntensity = audioData.slice(0, 2).reduce((sum, val) => sum + val, 0) / (2 * 255);
+    const lowFreqIntensity = sensitivity * audioData.slice(0, 2).reduce((sum, val) => sum + val, 0) / (2 * 255);
     // Use middle bands to determine mid frequency intensity
-    const midFreqIntensity = audioData.slice(2, 5).reduce((sum, val) => sum + val, 0) / (3 * 255);
+    const midFreqIntensity = sensitivity * audioData.slice(2, 5).reduce((sum, val) => sum + val, 0) / (3 * 255);
     // Use last bands to determine high frequency intensity
-    const highFreqIntensity = audioData.slice(5).reduce((sum, val) => sum + val, 0) / (3 * 255);
+    const highFreqIntensity = sensitivity * audioData.slice(5).reduce((sum, val) => sum + val, 0) / (3 * 255);
     
     // Create dynamic orbital movement patterns based on frequency distribution
     // More bass = upward motion, more treble = outward motion
@@ -90,7 +87,7 @@ const CloudParticles = ({ audioData }: { audioData: number[] }) => {
       
       // Get the appropriate audio band based on distance
       const bandIndex = Math.min(Math.floor((distance / 20) * audioData.length), audioData.length - 1);
-      const audioIntensity = audioData[bandIndex] / 255;
+      const audioIntensity = sensitivity * audioData[bandIndex] / 255;
       
       // More subtle noise with less variation
       const noise = Math.sin(time * 0.2 + i * 0.005 + x * 0.05 + y * 0.05) * 0.02;
@@ -194,7 +191,7 @@ const CloudParticles = ({ audioData }: { audioData: number[] }) => {
 };
 
 // Energy disturbance component
-const EnergyDisturbance = ({ audioData }: { audioData: number[] }) => {
+const EnergyDisturbance = ({ audioData, sensitivity = 1.0 }: { audioData: number[], sensitivity?: number }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.MeshStandardMaterial>(null);
   const lastRotationRef = useRef({ x: 0, y: 0, z: 0 });
@@ -203,19 +200,19 @@ const EnergyDisturbance = ({ audioData }: { audioData: number[] }) => {
     if (!meshRef.current || !materialRef.current) return;
     
     // Calculate average audio intensity for overall scaling
-    const avgIntensity = audioData.reduce((sum, val) => sum + val, 0) / audioData.length / 255;
+    const avgIntensity = sensitivity * audioData.reduce((sum, val) => sum + val, 0) / audioData.length / 255;
     
     // Analyze frequency distribution to influence direction
     // Low frequencies (bass) - first few bands
-    const lowFreqIntensity = audioData.slice(0, 2).reduce((sum, val) => sum + val, 0) / (2 * 255);
+    const lowFreqIntensity = sensitivity * audioData.slice(0, 2).reduce((sum, val) => sum + val, 0) / (2 * 255);
     // High frequencies (treble) - last few bands
-    const highFreqIntensity = audioData.slice(5).reduce((sum, val) => sum + val, 0) / (3 * 255);
+    const highFreqIntensity = sensitivity * audioData.slice(5).reduce((sum, val) => sum + val, 0) / (3 * 255);
     // Mid frequencies
-    const midFreqIntensity = audioData.slice(2, 5).reduce((sum, val) => sum + val, 0) / (3 * 255);
+    const midFreqIntensity = sensitivity * audioData.slice(2, 5).reduce((sum, val) => sum + val, 0) / (3 * 255);
     
     // Create a subtle breathing effect when quiet
     const time = clock.elapsedTime;
-    const breathingRate = 0.2; // Slow breathing
+    const breathingRate = 0.1; // Slow breathing
     const breathingEffect = (Math.sin(time * breathingRate) + 1) * 0.04; // 0.0-0.08 range
     
     // Smoother, more audio-reactive pulse effect 
@@ -312,6 +309,7 @@ const SoundVisualizer = () => {
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [rawVolume, setRawVolume] = useState<number>(0);
   const [debugInfo, setDebugInfo] = useState<{raw: number[], avg: number}>({ raw: [], avg: 0 });
+  const [sensitivity, setSensitivity] = useState<number>(1.0); // Default sensitivity is 1.0
   const animationFrameRef = useRef<number | null>(null);
   
   // Request microphone access and start listening
@@ -569,6 +567,28 @@ const SoundVisualizer = () => {
                 </div>
               </div>
               
+              {/* Sensitivity slider */}
+              <div className="mt-3">
+                <div className="text-white text-sm mb-1.5 flex justify-between items-center">
+                  <span className="flex items-center">
+                    <svg className="w-4 h-4 mr-1.5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                      <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                    </svg>
+                    Sensitivity
+                  </span>
+                  <span className="font-medium text-yellow-300">{(sensitivity * 100).toFixed(0)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="3"
+                  step="0.1"
+                  value={sensitivity}
+                  onChange={(e) => setSensitivity(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-800/50 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                />
+              </div>
+              
               {/* Collapsible Debug Panel */}
               <div className="mt-3 border-t border-white/10 pt-3">
                 <details className="text-white">
@@ -615,8 +635,8 @@ const SoundVisualizer = () => {
         <ambientLight intensity={0.2} />
         <pointLight position={[10, 10, 10]} intensity={1} />
         
-        <CloudParticles audioData={audioData} />
-        <EnergyDisturbance audioData={audioData} />
+        <CloudParticles audioData={audioData} sensitivity={sensitivity} />
+        <EnergyDisturbance audioData={audioData} sensitivity={sensitivity} />
       </Canvas>
     </div>
   );
