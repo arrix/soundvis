@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import * as THREE from 'three';
@@ -305,12 +305,13 @@ const SoundVisualizer = () => {
   const [audioProcessor] = useState(() => new AudioProcessor());
   const [isListening, setIsListening] = useState(false);
   const [audioData, setAudioData] = useState<number[]>(Array(8).fill(0));
-  const [microphoneStatus, setMicrophoneStatus] = useState<'initial' | 'requesting' | 'active' | 'test' | 'error'>('initial');
+  const [microphoneStatus, setMicrophoneStatus] = useState<'initial' | 'requesting' | 'active' | 'test' | 'sample' | 'error'>('initial');
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [rawVolume, setRawVolume] = useState<number>(0);
   const [debugInfo, setDebugInfo] = useState<{raw: number[], avg: number}>({ raw: [], avg: 0 });
   const [sensitivity, setSensitivity] = useState<number>(1.0); // Default sensitivity is 1.0
   const animationFrameRef = useRef<number | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
   
   // Request microphone access and start listening
   const startListening = async () => {
@@ -352,11 +353,61 @@ const SoundVisualizer = () => {
     }
   };
   
-  // Stop listening
+  // Start sample music
+  const startSampleMusic = async () => {
+    try {
+      setMicrophoneStatus('requesting');
+      
+      // Create audio element if it doesn't exist
+      if (!audioElementRef.current) {
+        audioElementRef.current = new Audio("https://s3-us-west-2.amazonaws.com/s.cdpn.io/858/outfoxing.mp3");
+        audioElementRef.current.crossOrigin = "anonymous";
+        audioElementRef.current.loop = true;
+        // Preload the audio
+        audioElementRef.current.load();
+      }
+      
+      // Connect audio element to analyzer
+      const success = await audioProcessor.connectAudioElement(audioElementRef.current);
+      
+      if (success) {
+        try {
+          // Play the audio - the processor may have created a new element
+          await audioElementRef.current.play();
+          console.log("Sample music started playing");
+          setIsListening(true);
+          setMicrophoneStatus('sample');
+        } catch (playError) {
+          console.error("Error playing audio:", playError);
+          setMicrophoneStatus('error');
+          alert('Failed to play audio. This might be due to browser autoplay restrictions. Try clicking on the page first.');
+        }
+      } else {
+        setMicrophoneStatus('error');
+        alert('Failed to connect sample audio.');
+      }
+    } catch (error) {
+      console.error('Error starting sample music:', error);
+      setMicrophoneStatus('error');
+      alert('An error occurred while starting sample music.');
+    }
+  };
+  
+  // Stop listening - update to handle sample audio
   const stopListening = () => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
+    }
+    
+    // Stop audio if playing
+    if (audioElementRef.current && microphoneStatus === 'sample') {
+      try {
+        audioElementRef.current.pause();
+        audioElementRef.current.currentTime = 0;
+      } catch (e) {
+        console.error("Error stopping audio:", e);
+      }
     }
     
     audioProcessor.cleanup();
@@ -375,19 +426,20 @@ const SoundVisualizer = () => {
       // Get raw volume level (RMS)
       const currentRawVolume = audioProcessor.getRawVolume();
       setRawVolume(currentRawVolume);
+      // console.log("Raw volume:", currentRawVolume);
       
       // Get processed frequency bands for visualization
       const frequencyBands = audioProcessor.getFrequencyBands();
       
       // Calculate raw audio metrics for debugging
       let rawAvg = 0;
-      let rawMax = 0;
+      // let rawMax = 0;
       let nonZeroCount = 0;
       
       if (rawData) {
         // Sample a portion of the frequency data (first 100 bins)
         const sampleData = Array.from(rawData.slice(0, 100));
-        rawMax = Math.max(...sampleData);
+        // rawMax = Math.max(...sampleData);
         
         // Count non-zero values
         nonZeroCount = sampleData.filter(v => v > 0).length;
@@ -427,32 +479,12 @@ const SoundVisualizer = () => {
       } else {
         console.log('No audio signal detected', nonZeroCount > 0 ? `(but raw data shows ${nonZeroCount} non-zero values)` : '');
         
-        // If we're in test mode but not getting signal, use synthetic values for visualization
-        if (microphoneStatus === 'test') {
-          // Create a pulsing synthetic pattern
-          const time = Date.now() / 1000;
-          const pulseFactor = (Math.sin(time * 2) + 1) / 2; // 0 to 1
-          
-          const syntheticLevel = 0.3 + pulseFactor * 0.7;
-          setAudioLevel(syntheticLevel);
-          
-          // Create synthetic frequency bands
-          const syntheticBands = Array(8).fill(0).map((_, i) => {
-            // Different bands pulse at different rates
-            const bandPulse = Math.sin(time * (1 + i * 0.2) + i) * 0.5 + 0.5;
-            return Math.floor(bandPulse * 255);
-          });
-          
-          setAudioData([...syntheticBands]);
-          console.log('Using synthetic visualization data');
-        } else {
-          // For real microphone with no signal, still update with zeros to keep animation responsive
-          setAudioData(Array(8).fill(0)); 
-        }
+        // For real microphone or sample music with no signal, still update with zeros to keep animation responsive
+        setAudioData(Array(8).fill(0)); 
       }
       
       // Use a shorter timeout interval for more responsive UI
-      animationFrameRef.current = requestAnimationFrame(updateAudioData);
+      animationFrameRef.current = setTimeout(updateAudioData, 100);
     }
   };
   
@@ -506,6 +538,17 @@ const SoundVisualizer = () => {
               </button>
               
               <button
+                onClick={startSampleMusic}
+                disabled={microphoneStatus === 'requesting'}
+                className="w-full px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all disabled:opacity-50 font-medium shadow-md flex items-center justify-center"
+              >
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                </svg>
+                Use Sample Music
+              </button>
+              
+              <button
                 onClick={startTestTone}
                 disabled={microphoneStatus === 'requesting'}
                 className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:from-purple-600 hover:to-pink-600 transition-all disabled:opacity-50 font-medium shadow-md flex items-center justify-center"
@@ -513,7 +556,7 @@ const SoundVisualizer = () => {
                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                 </svg>
-                Use Test Sound
+                Use Synthetic
               </button>
             </div>
           ) : (
@@ -526,7 +569,8 @@ const SoundVisualizer = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
                 </svg>
-                {microphoneStatus === 'test' ? 'Stop Test Sound' : 'Stop Listening'}
+                {microphoneStatus === 'test' ? 'Stop Test Sound' : 
+                 microphoneStatus === 'sample' ? 'Stop Sample Music' : 'Stop Listening'}
               </button>
               
               {/* Audio level indicator with enhanced UI */}
@@ -562,7 +606,7 @@ const SoundVisualizer = () => {
                 <div className="h-2.5 w-full bg-gray-800/50 rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-gradient-to-r from-green-500 to-emerald-500 transition-all duration-75"
-                    style={{ width: `${Math.max(2, rawVolume * 100 * 5)}%` }}
+                    style={{ width: `${Math.max(2, rawVolume * 100)}%` }}
                   />
                 </div>
               </div>

@@ -4,8 +4,9 @@ export class AudioProcessor {
   private dataArray: Uint8Array | null = null;
   private microphoneStream: MediaStream | null = null;
   private oscillator: OscillatorNode | null = null;
-  private usingSynthetic: boolean = false;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private mediaElementSource: MediaElementAudioSourceNode | null = null;
+  private connectedAudioElement: HTMLAudioElement | null = null;
 
   constructor() {
     // Don't initialize the audio context in the constructor
@@ -95,13 +96,8 @@ export class AudioProcessor {
         // Create and store the source node
         this.sourceNode = this.audioContext.createMediaStreamSource(this.microphoneStream);
         
-        // Create an intermediate gain node to check levels (debugging)
-        const gainNode = this.audioContext.createGain();
-        gainNode.gain.value = 1.0; // Unity gain, just for monitoring
-        
-        // Connect the source to gain to analyzer
-        this.sourceNode.connect(gainNode);
-        gainNode.connect(this.analyser);
+        // Connect the source to analyzer
+        this.sourceNode.connect(this.analyser);
         
         console.log("Microphone connected successfully to audio analyzer");
         
@@ -153,30 +149,38 @@ export class AudioProcessor {
     return null;
   }
 
-  public getAverageFrequency(): number {
-    if (!this.dataArray) return 0;
-    
-    const sum = this.dataArray.reduce((acc, val) => acc + val, 0);
-    return sum / this.dataArray.length;
-  }
-
   public getRawVolume(): number {
-    if (!this.analyser || !this.dataArray) return 0;
-    
-    // Get time domain data to better measure volume
-    const timeDomainData = new Uint8Array(this.analyser.fftSize);
-    this.analyser.getByteTimeDomainData(timeDomainData);
-    
-    // Calculate RMS (root mean square) volume
-    let sumOfSquares = 0;
-    for (let i = 0; i < timeDomainData.length; i++) {
-      // Normalize to [-1, 1]
-      const amplitude = (timeDomainData[i] / 128) - 1;
-      sumOfSquares += amplitude * amplitude;
+    if (!this.analyser || !this.dataArray) {
+      console.log("Analyzer or data array not available for volume calculation");
+      return 0;
     }
     
-    const rms = Math.sqrt(sumOfSquares / timeDomainData.length);
-    return rms;
+    try {
+      // Get time domain data to better measure volume
+      const timeDomainData = new Uint8Array(this.analyser.fftSize);
+      this.analyser.getByteTimeDomainData(timeDomainData);
+      
+      // Calculate RMS (root mean square) volume
+      let sumOfSquares = 0;
+      for (let i = 0; i < timeDomainData.length; i++) {
+        // Normalize to [-1, 1]
+        const amplitude = (timeDomainData[i] / 128) - 1;
+        sumOfSquares += amplitude * amplitude;
+      }
+      
+      const rms = Math.sqrt(sumOfSquares / timeDomainData.length);
+      
+      // If volume is very low
+      // something might be wrong with the connection
+      if (rms < 0.001) {
+        console.log("Very low volume detected with audio source. Connection might need refreshing.");
+      }
+      
+      return rms;
+    } catch (error) {
+      console.error("Error calculating raw volume:", error);
+      return 0;
+    }
   }
 
   public getFrequencyBands(): number[] {
@@ -207,7 +211,7 @@ export class AudioProcessor {
     const bands: number[] = [];
     const totalBands = 8;
     
-    if (hasSignal || this.usingSynthetic) {
+    if (hasSignal) {
       // Use logarithmic band distribution for more natural frequency response
       const logSpace = (start: number, end: number, n: number) => {
         const result = [];
@@ -287,8 +291,6 @@ export class AudioProcessor {
         await this.audioContext.resume();
       }
       
-        this.usingSynthetic = true;
-      
       // Disconnect any previous connections
       if (this.oscillator) {
         this.oscillator.stop();
@@ -310,7 +312,7 @@ export class AudioProcessor {
         
         // Create a gain node to control volume
         const masterGain = this.audioContext.createGain();
-        masterGain.gain.setValueAtTime(0.7, this.audioContext.currentTime);
+        masterGain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
         masterGain.connect(this.analyser);
         
         // Create LFO for amplitude modulation
@@ -360,7 +362,57 @@ export class AudioProcessor {
     }
   }
 
-  // Modify the cleanup method to properly stop oscillator
+  // Connect an audio element to the analyzer
+  public async connectAudioElement(audioElement: HTMLAudioElement): Promise<boolean> {
+    try {
+      // First initialize the audio context
+      if (!this.initAudioContext()) {
+        console.error("Failed to initialize AudioContext for audio element");
+        return false;
+      }
+      
+      if (!this.audioContext || !this.analyser) {
+        console.error("AudioContext or Analyzer not available for audio element");
+        return false;
+      }
+      
+      // Ensure the context is running
+      if (this.audioContext.state !== 'running') {
+        console.log("AudioContext not running, attempting to resume for audio element...");
+        await this.audioContext.resume();
+      }
+      
+      // Check if we're trying to reconnect the same element
+      if (this.connectedAudioElement === audioElement && this.mediaElementSource) {
+        console.log("Audio element already connected, reusing existing connection");
+        // Just make sure it's connected to the analyzer
+        this.mediaElementSource.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
+        return true;
+      }
+      
+      // Create a media element source
+      this.mediaElementSource = this.audioContext.createMediaElementSource(audioElement);
+      
+      // Connect the source to the analyzer
+      this.mediaElementSource.connect(this.analyser);
+      
+      // Also connect the source to the destination (speakers)
+      this.analyser.connect(this.audioContext.destination);
+      
+      // Store reference to the connected audio element
+      this.connectedAudioElement = audioElement;
+      
+      console.log("Audio element connected to analyzer");
+      
+      return true;
+    } catch (error) {
+      console.error('Error connecting audio element:', error);
+      return false;
+    }
+  }
+
+  // Modify the cleanup method to also clean up media element connections
   public cleanup() {
     // Stop microphone tracks
     if (this.microphoneStream) {
@@ -378,8 +430,8 @@ export class AudioProcessor {
     // Stop and disconnect oscillator
     if (this.oscillator) {
       try {
-      this.oscillator.stop();
-      this.oscillator.disconnect();
+        this.oscillator.stop();
+        this.oscillator.disconnect();
         console.log("Oscillator stopped and disconnected");
       } catch (e) {
         console.error("Error stopping oscillator:", e);
@@ -398,10 +450,21 @@ export class AudioProcessor {
       this.sourceNode = null;
     }
     
+    // Disconnect media element source
+    if (this.mediaElementSource) {
+      try {
+        this.mediaElementSource.disconnect();
+        console.log("Media element source disconnected");
+      } catch (e) {
+        console.error("Error disconnecting media element source:", e);
+      }
+      // this.mediaElementSource = null;
+    }
+    
     // Disconnect analyser
     if (this.analyser) {
       try {
-      this.analyser.disconnect();
+        this.analyser.disconnect();
         console.log("Analyser disconnected");
       } catch (e) {
         console.error("Error disconnecting analyser:", e);
@@ -410,7 +473,8 @@ export class AudioProcessor {
     
     // Reset flags and data
     this.dataArray = null;
-    this.usingSynthetic = false;
+    // we have to keep the connectedAudioElement because there is no way to unbind it from the audio element
+    // this.connectedAudioElement = null;
     
     console.log("Audio processor cleaned up");
   }

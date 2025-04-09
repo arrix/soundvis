@@ -1,4 +1,3 @@
-import React from 'react';
 import SoundVisualizer from './components/SoundVisualizer';
 import './App.css'
 
