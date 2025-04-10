@@ -193,8 +193,106 @@ const CloudParticles = ({ audioData, sensitivity = 1.0 }: { audioData: number[],
 // Energy disturbance component
 const EnergyDisturbance = ({ audioData, sensitivity = 1.0 }: { audioData: number[], sensitivity?: number }) => {
   const meshRef = useRef<THREE.Mesh>(null);
-  const materialRef = useRef<THREE.MeshStandardMaterial>(null);
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
   const lastRotationRef = useRef({ x: 0, y: 0, z: 0 });
+  
+  // Create the shader material when component mounts
+  useEffect(() => {
+    if (meshRef.current) {
+      const shaderMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0 },
+          colorA: { value: new THREE.Color('#ff0080') },
+          colorB: { value: new THREE.Color('#7928ca') },
+          colorC: { value: new THREE.Color('#0070f3') },
+          colorD: { value: new THREE.Color('#00dfd8') },
+          audioIntensity: { value: 0 },
+          lowFreqIntensity: { value: 0 },
+          midFreqIntensity: { value: 0 },
+          highFreqIntensity: { value: 0 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying vec3 vNormal;
+          
+          void main() {
+            vUv = uv;
+            vPosition = position;
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float time;
+          uniform vec3 colorA;
+          uniform vec3 colorB;
+          uniform vec3 colorC;
+          uniform vec3 colorD;
+          uniform float audioIntensity;
+          uniform float lowFreqIntensity;
+          uniform float midFreqIntensity;
+          uniform float highFreqIntensity;
+          
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying vec3 vNormal;
+          
+          void main() {
+            // Use normal direction for base gradient effect
+            float normalGradient = dot(vNormal, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+            
+            // Calculate multiple gradients that shift with time and audio
+            float gradient1 = vUv.x + sin(time * 0.2 + vUv.y * 10.0) * 0.1 * (1.0 + audioIntensity * 2.0);
+            float gradient2 = vUv.y + cos(time * 0.3 + vUv.x * 8.0) * 0.1 * (1.0 + midFreqIntensity * 3.0);
+            float gradient3 = length(vUv - 0.5) + sin(time * 0.4) * 0.1 * (1.0 + highFreqIntensity * 2.0);
+            
+            // Create dynamic color weighting based on audio frequencies
+            float weight1 = sin(time * 0.1 + lowFreqIntensity * 5.0) * 0.5 + 0.5;
+            float weight2 = cos(time * 0.15 + midFreqIntensity * 4.0) * 0.5 + 0.5;
+            float weight3 = sin(time * 0.2 + highFreqIntensity * 3.0) * 0.5 + 0.5;
+            
+            // Blend multiple gradients with varying influences from audio
+            vec3 gradientColor = mix(
+              mix(colorA, colorB, gradient1 * (1.0 + lowFreqIntensity)),
+              mix(colorC, colorD, gradient2 * (1.0 + highFreqIntensity)),
+              gradient3 * weight3
+            );
+            
+            // Add shimmer effect intensified by audio
+            float shimmer = sin(vPosition.x * 10.0 + time * 5.0) * sin(vPosition.y * 10.0 + time * 3.0) * sin(vPosition.z * 10.0 + time * 4.0);
+            shimmer = shimmer * 0.1 * (1.0 + audioIntensity * 5.0);
+            
+            // Make edges glow brighter - fresnel-like effect
+            float fresnel = pow(1.0 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.0);
+            fresnel = fresnel * (0.6 + audioIntensity * 0.8);
+            
+            // Final color with shimmer and fresnel
+            vec3 finalColor = gradientColor + shimmer + fresnel * vec3(1.0, 0.5, 1.0) * (0.3 + highFreqIntensity);
+            
+            // Add pulsing emissive glow that responds to audio
+            float pulse = 0.6 + sin(time * 2.0) * 0.1 + audioIntensity * 0.8;
+            finalColor *= pulse;
+            
+            gl_FragColor = vec4(finalColor, 0.9);
+          }
+        `,
+        transparent: true,
+        side: THREE.DoubleSide
+      });
+      
+      // Apply the material to the mesh
+      meshRef.current.material = shaderMaterial;
+      materialRef.current = shaderMaterial;
+    }
+    
+    // Cleanup
+    return () => {
+      if (materialRef.current) {
+        materialRef.current.dispose();
+      }
+    };
+  }, []);
   
   useFrame(({ clock }) => {
     if (!meshRef.current || !materialRef.current) return;
@@ -247,18 +345,55 @@ const EnergyDisturbance = ({ audioData, sensitivity = 1.0 }: { audioData: number
     meshRef.current.rotation.y += lastRotationRef.current.y;
     meshRef.current.rotation.z += lastRotationRef.current.z;
     
-    // Change material properties based on audio - smoother transitions
-    const baseEmissive = 0.2 + breathingEffect; // Subtle base glow
-    const emissiveIntensity = baseEmissive + avgIntensity * 2.5; // Less intense than before
-    materialRef.current.emissiveIntensity = emissiveIntensity;
+    // Update shader uniforms with audio data and time
+    if (materialRef.current && materialRef.current.uniforms) {
+      materialRef.current.uniforms.time.value = time;
+      materialRef.current.uniforms.audioIntensity.value = avgIntensity;
+      materialRef.current.uniforms.lowFreqIntensity.value = lowFreqIntensity;
+      materialRef.current.uniforms.midFreqIntensity.value = midFreqIntensity;
+      materialRef.current.uniforms.highFreqIntensity.value = highFreqIntensity;
     
-    // Create gentler color pulsing effect
-    const r = 0.3 + 0.1 * Math.sin(time * 0.3) + avgIntensity * 0.5;
-    const g = 0.1 + avgIntensity * 0.3;
-    const b = 0.6 + 0.1 * Math.cos(time * 0.3) + avgIntensity * 0.4;
-    
-    materialRef.current.color.setRGB(r, g, b);
-    materialRef.current.emissive.setRGB(r * 0.5, g * 0.5, b * 0.5);
+      // Create dynamic color transitions based on audio frequency distribution
+      // Low frequencies affect color A (warm colors)
+      const rA = 0.9 + lowFreqIntensity * 0.3;
+      const gA = 0.1 + lowFreqIntensity * 0.3;
+      const bA = 0.2 + lowFreqIntensity * 0.2;
+      materialRef.current.uniforms.colorA.value.setRGB(
+        Math.min(1, rA),
+        Math.min(1, gA),
+        Math.min(1, bA)
+      );
+      
+      // Mid frequencies affect color B (purple/magenta)
+      const rB = 0.5 + midFreqIntensity * 0.4;
+      const gB = 0.1 + midFreqIntensity * 0.2;
+      const bB = 0.8 - midFreqIntensity * 0.2;
+      materialRef.current.uniforms.colorB.value.setRGB(
+        Math.min(1, rB),
+        Math.min(1, gB), 
+        Math.min(1, bB)
+      );
+      
+      // High frequencies affect color C (blue/cyan)
+      const rC = 0.1 - highFreqIntensity * 0.1;
+      const gC = 0.4 + highFreqIntensity * 0.4;
+      const bC = 1.0;
+      materialRef.current.uniforms.colorC.value.setRGB(
+        Math.max(0, rC),
+        Math.min(1, gC),
+        bC
+      );
+      
+      // Overall intensity affects color D (accent)
+      const rD = 0.8 - avgIntensity * 0.3;
+      const gD = 0.8 + avgIntensity * 0.2;
+      const bD = 0.1 + avgIntensity * 0.9;
+      materialRef.current.uniforms.colorD.value.setRGB(
+        Math.min(1, Math.max(0, rD)),
+        Math.min(1, gD),
+        Math.min(1, bD)
+      );
+    }
     
     // Only change geometry with significant audio - less frequently
     if (meshRef.current.geometry instanceof THREE.TorusKnotGeometry) {
@@ -286,16 +421,6 @@ const EnergyDisturbance = ({ audioData, sensitivity = 1.0 }: { audioData: number
   return (
     <mesh ref={meshRef}>
       <torusKnotGeometry args={[1, 0.3, 100, 16, 2, 3]} />
-      <meshStandardMaterial
-        ref={materialRef}
-        color="#4a00e0"
-        metalness={0.7}
-        roughness={0.2}
-        emissive="#220066"
-        emissiveIntensity={0.3} // Lower base intensity
-        transparent
-        opacity={0.8}
-      />
     </mesh>
   );
 };
@@ -454,6 +579,7 @@ const SoundVisualizer = () => {
           avg: rawAvg
         });
         
+        // Comment out problematic console.log line
         // console.log(`Raw audio stats - Max: ${rawMax}, NonZero: ${nonZeroCount}/100, Avg: ${rawAvg.toFixed(2)}, RMS Volume: ${currentRawVolume.toFixed(4)}`);
       }
       
